@@ -3,8 +3,10 @@ package com.admissionmanagement.ui;
 import com.admissionmanagement.application.processing.ApplicationScope;
 import com.admissionmanagement.controller.processing.ApplicationProcessingController;
 import com.admissionmanagement.domain.application.ApplicationStatus;
+import com.admissionmanagement.domain.application.CommunicationChannel;
 import com.admissionmanagement.domain.application.CommunicationResult;
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
+import com.admissionmanagement.dto.CommunicationRequest;
 import com.admissionmanagement.projection.ApplicationDetailsProjection;
 import com.admissionmanagement.projection.ApplicationSummaryProjection;
 
@@ -13,16 +15,21 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.RadioButton;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Toggle;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
@@ -286,7 +293,15 @@ public class ApplicationProcessingView {
                     startApplicationProcessing(application.applicationId(), startProcessingButton));
             actions.getChildren().add(startProcessingButton);
         } else if (scope == ApplicationScope.IN_PROGRESS) {
-            actions.getChildren().addAll(new Button("Record communication"), new Button("Finish Processing"));
+            Button recordCommunicationButton = new Button("Record Communication");
+            recordCommunicationButton.setOnAction(event -> openRecordCommunicationDialog(
+                    recordCommunicationButton.getScene().getWindow(),
+                    application.applicationId(),
+                    application.fullName(),
+                    application.programName(),
+                    () -> loadApplications(selectedScope())
+            ));
+            actions.getChildren().addAll(recordCommunicationButton, new Button("Finish Processing"));
         }
 
         card.getChildren().addAll(applicant, details, actions);
@@ -359,18 +374,18 @@ public class ApplicationProcessingView {
         dialog.setHeaderText(details.fullName());
         dialog.initOwner(owner);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        dialog.getDialogPane().setContent(createDetailsContent(details));
+        dialog.getDialogPane().setContent(createDetailsContent(dialog, details));
         dialog.getDialogPane().setPrefWidth(560);
         return dialog;
     }
 
-    private Node createDetailsContent(ApplicationDetailsProjection details) {
+    private Node createDetailsContent(Dialog<ButtonType> dialog, ApplicationDetailsProjection details) {
         VBox content = new VBox(18);
         content.setPadding(new Insets(8, 14, 8, 14));
         content.getChildren().addAll(
                 section("Applicant Information", applicantDetailsGrid(details)),
                 section("Application Information", applicationDetailsGrid(details)),
-                section("Actions", actionControls(details.status()))
+                section("Actions", actionControls(dialog, details))
         );
         return content;
     }
@@ -427,20 +442,175 @@ public class ApplicationProcessingView {
         return new VBox(8, title, content);
     }
 
-    private Node actionControls(ApplicationStatus status) {
-        if (status == ApplicationStatus.PENDING) {
+    private Node actionControls(Dialog<ButtonType> dialog, ApplicationDetailsProjection details) {
+        if (details.status() == ApplicationStatus.PENDING) {
             Button startProcessingButton = new Button("Start Processing");
             startProcessingButton.setDisable(true);
             return new HBox(8, startProcessingButton);
         }
-        if (status == ApplicationStatus.IN_PROGRESS) {
+        if (details.status() == ApplicationStatus.IN_PROGRESS) {
             Button recordCommunicationButton = new Button("Record Communication");
             Button finishProcessingButton = new Button("Finish Processing");
-            recordCommunicationButton.setDisable(true);
+            recordCommunicationButton.setOnAction(event -> openRecordCommunicationDialog(
+                    recordCommunicationButton.getScene().getWindow(),
+                    details.applicationId(),
+                    details.fullName(),
+                    details.programName(),
+                    () -> refreshDetailsDialog(dialog, details.applicationId())
+            ));
             finishProcessingButton.setDisable(true);
             return new HBox(8, recordCommunicationButton, finishProcessingButton);
         }
         return new Label("Application processing is completed.");
+    }
+
+    private void refreshDetailsDialog(Dialog<ButtonType> dialog, Integer applicationId) {
+        dialog.getDialogPane().setContent(new Label("Refreshing application details..."));
+
+        Task<Optional<ApplicationDetailsProjection>> task = new Task<>() {
+            @Override
+            protected Optional<ApplicationDetailsProjection> call() {
+                return controller.getApplicationDetails(applicationId);
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            Optional<ApplicationDetailsProjection> details = task.getValue();
+            if (details.isEmpty()) {
+                dialog.close();
+                showError(dialog.getOwner(), "Application was not found.");
+                loadApplications(selectedScope());
+                return;
+            }
+            dialog.setHeaderText(details.get().fullName());
+            dialog.getDialogPane().setContent(createDetailsContent(dialog, details.get()));
+            loadApplications(selectedScope());
+        });
+        task.setOnFailed(event -> {
+            Throwable exception = task.getException();
+            dialog.getDialogPane().setContent(new Label(
+                    "Could not refresh application details: " + exception.getMessage()
+            ));
+            loadApplications(selectedScope());
+        });
+
+        Thread thread = new Thread(task, "refresh-application-details");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void openRecordCommunicationDialog(
+            Window owner,
+            Integer applicationId,
+            String applicantName,
+            String programName,
+            Runnable onSaved
+    ) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Record Communication");
+        dialog.setHeaderText("Record Communication");
+        dialog.initOwner(owner);
+
+        ButtonType saveButtonType = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, saveButtonType);
+
+        ComboBox<CommunicationChannel> channelBox = new ComboBox<>();
+        channelBox.getItems().setAll(CommunicationChannel.values());
+        channelBox.setPromptText("Select channel");
+        channelBox.setMaxWidth(Double.MAX_VALUE);
+
+        ToggleGroup resultGroup = new ToggleGroup();
+        VBox resultButtons = new VBox(6);
+        for (CommunicationResult result : CommunicationResult.values()) {
+            RadioButton radioButton = new RadioButton(result.name());
+            radioButton.setToggleGroup(resultGroup);
+            radioButton.setUserData(result);
+            resultButtons.getChildren().add(radioButton);
+        }
+
+        TextArea commentArea = new TextArea();
+        commentArea.setPromptText("Enter communication details, applicant response, or additional notes.");
+        commentArea.setPrefRowCount(4);
+        commentArea.setWrapText(true);
+
+        Label validationLabel = new Label();
+        validationLabel.setStyle("-fx-text-fill: #b42318;");
+
+        VBox content = new VBox(12);
+        content.setPadding(new Insets(8, 14, 8, 14));
+        content.getChildren().addAll(
+                new Label("Applicant: " + applicantName),
+                new Label("Program: " + programName),
+                labeledControl("Communication Channel", channelBox),
+                new VBox(6, new Label("Communication Result"), resultButtons),
+                labeledControl("Comment (optional)", commentArea),
+                validationLabel
+        );
+
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().setPrefWidth(520);
+
+        Button saveButton = (Button) dialog.getDialogPane().lookupButton(saveButtonType);
+        saveButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+            event.consume();
+
+            CommunicationChannel channel = channelBox.getValue();
+            if (channel == null) {
+                validationLabel.setText("Please select communication channel.");
+                return;
+            }
+
+            Toggle selectedResult = resultGroup.getSelectedToggle();
+            if (selectedResult == null) {
+                validationLabel.setText("Please select communication result.");
+                return;
+            }
+
+            CommunicationRequest request = new CommunicationRequest(
+                    channel,
+                    (CommunicationResult) selectedResult.getUserData(),
+                    blankToNull(commentArea.getText())
+            );
+            saveCommunication(applicationId, request, saveButton, validationLabel, dialog, onSaved);
+        });
+
+        dialog.showAndWait();
+    }
+
+    private void saveCommunication(
+            Integer applicationId,
+            CommunicationRequest request,
+            Button saveButton,
+            Label validationLabel,
+            Dialog<ButtonType> dialog,
+            Runnable onSaved
+    ) {
+        saveButton.setDisable(true);
+        saveButton.setText("Saving...");
+        validationLabel.setText("");
+
+        Task<Void> task = new Task<>() {
+            @Override
+            protected Void call() {
+                controller.recordCommunication(applicationId, request);
+                return null;
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            dialog.close();
+            onSaved.run();
+        });
+        task.setOnFailed(event -> {
+            saveButton.setDisable(false);
+            saveButton.setText("Save");
+            Throwable exception = task.getException();
+            validationLabel.setText("Could not record communication: " + exception.getMessage());
+        });
+
+        Thread thread = new Thread(task, "record-communication");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     private void showError(Window owner, String message) {

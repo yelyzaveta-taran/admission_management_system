@@ -1,6 +1,7 @@
 package com.admissionmanagement.application.processing;
 
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
+import com.admissionmanagement.dto.CommunicationRequest;
 import com.admissionmanagement.domain.application.Application;
 import com.admissionmanagement.projection.ApplicationDetailsProjection;
 import com.admissionmanagement.projection.ApplicationSummaryProjection;
@@ -40,6 +41,20 @@ public class ApplicationProcessingService {
         Application application = applicationRepository.findById(applicationId)
                 .orElseThrow(() -> new IllegalArgumentException("Application was not found"));
         application.startProcessing();
+        applicationRepository.save(application);
+    }
+
+    public void recordCommunication(Integer applicationId, CommunicationRequest communicationData) {
+        Objects.requireNonNull(applicationId);
+        Objects.requireNonNull(communicationData);
+
+        Application application = applicationRepository.findById(applicationId)
+                .orElseThrow(() -> new IllegalArgumentException("Application was not found"));
+        application.recordCommunication(
+                communicationData.channel(),
+                communicationData.result(),
+                communicationData.comment()
+        );
         applicationRepository.save(application);
     }
 }

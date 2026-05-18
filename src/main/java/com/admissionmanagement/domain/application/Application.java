@@ -3,6 +3,7 @@ package com.admissionmanagement.domain.application;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public class Application {
     private final Integer applicationId;
@@ -97,7 +98,24 @@ public class Application {
     public void finishProcessing() {
     }
 
-    public void recordCommunication() {
+    public void recordCommunication(
+            CommunicationChannel channel,
+            CommunicationResult result,
+            String comment
+    ) {
+        Objects.requireNonNull(channel);
+        Objects.requireNonNull(result);
+
+        if (status != ApplicationStatus.IN_PROGRESS) {
+            throw new IllegalStateException("Communication can be recorded only for applications in progress");
+        }
+
+        newEvents.add(new CommunicationEvent(
+                channel,
+                result,
+                comment,
+                LocalDateTime.now()
+        ));
     }
 
     public void clearNewEvents() {
