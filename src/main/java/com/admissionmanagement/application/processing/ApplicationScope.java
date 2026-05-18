@@ -1,4 +1,6 @@
-package com.admissionmanagement.domain.application;
+package com.admissionmanagement.application.processing;
+
+import com.admissionmanagement.domain.application.ApplicationStatus;
 
 import java.util.List;
 
