@@ -1,11 +1,14 @@
 package com.admissionmanagement.domain.application;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 public class Application {
+    private static final ZoneId APPLICATION_TIME_ZONE = ZoneId.of("Europe/Kyiv");
+
     private final Integer applicationId;
     private final Integer programId;
     private final String firstName;
@@ -91,11 +94,28 @@ public class Application {
                 previousStatus,
                 status,
                 "Заявку взято в опрацювання",
-                LocalDateTime.now()
+                LocalDateTime.now(APPLICATION_TIME_ZONE)
         ));
     }
 
-    public void finishProcessing() {
+    public void finishProcessing(ApplicationStatus finalStatus, String reason) {
+        Objects.requireNonNull(finalStatus);
+
+        if (status != ApplicationStatus.IN_PROGRESS) {
+            throw new IllegalStateException("Only applications in progress can be finished");
+        }
+        if (!isFinalStatus(finalStatus)) {
+            throw new IllegalArgumentException("Application can be finished only with a final status");
+        }
+
+        ApplicationStatus previousStatus = status;
+        status = finalStatus;
+        newEvents.add(new StatusChangeEvent(
+                previousStatus,
+                status,
+                reason,
+                LocalDateTime.now(APPLICATION_TIME_ZONE)
+        ));
     }
 
     public void recordCommunication(
@@ -114,11 +134,17 @@ public class Application {
                 channel,
                 result,
                 comment,
-                LocalDateTime.now()
+                LocalDateTime.now(APPLICATION_TIME_ZONE)
         ));
     }
 
     public void clearNewEvents() {
         newEvents.clear();
+    }
+
+    private boolean isFinalStatus(ApplicationStatus status) {
+        return status == ApplicationStatus.CONFIRMED
+                || status == ApplicationStatus.REJECTED
+                || status == ApplicationStatus.CANCELLED;
     }
 }

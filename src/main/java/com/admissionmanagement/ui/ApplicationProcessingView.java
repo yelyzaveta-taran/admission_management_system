@@ -7,7 +7,9 @@ import com.admissionmanagement.domain.application.CommunicationChannel;
 import com.admissionmanagement.domain.application.CommunicationResult;
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
 import com.admissionmanagement.dto.CommunicationRequest;
+import com.admissionmanagement.dto.FinishProcessingRequest;
 import com.admissionmanagement.projection.ApplicationDetailsProjection;
+import com.admissionmanagement.projection.ApplicationEventProjection;
 import com.admissionmanagement.projection.ApplicationSummaryProjection;
 
 import javafx.concurrent.Task;
@@ -300,6 +302,7 @@ public class ApplicationProcessingView {
             actions.getChildren().add(startProcessingButton);
         } else if (scope == ApplicationScope.IN_PROGRESS) {
             Button recordCommunicationButton = new Button("Record Communication");
+            Button finishProcessingButton = new Button("Finish Processing");
             recordCommunicationButton.setOnAction(event -> openRecordCommunicationDialog(
                     recordCommunicationButton.getScene().getWindow(),
                     application.applicationId(),
@@ -307,7 +310,14 @@ public class ApplicationProcessingView {
                     application.programName(),
                     () -> loadApplications(selectedScope())
             ));
-            actions.getChildren().addAll(recordCommunicationButton, new Button("Finish Processing"));
+            finishProcessingButton.setOnAction(event -> openFinishProcessingDialog(
+                    finishProcessingButton.getScene().getWindow(),
+                    application.applicationId(),
+                    application.fullName(),
+                    application.programName(),
+                    () -> loadApplications(selectedScope())
+            ));
+            actions.getChildren().addAll(recordCommunicationButton, finishProcessingButton);
         }
 
         card.getChildren().addAll(applicant, details, actions);
@@ -391,7 +401,8 @@ public class ApplicationProcessingView {
         content.getChildren().addAll(
                 section("Applicant Information", applicantDetailsGrid(details)),
                 section("Application Information", applicationDetailsGrid(details)),
-                section("Actions", actionControls(dialog, details))
+                section("Actions", actionControls(dialog, details)),
+                section("Event History", eventHistoryPanel(details.applicationId()))
         );
         return content;
     }
@@ -464,7 +475,13 @@ public class ApplicationProcessingView {
                     details.programName(),
                     () -> refreshDetailsDialog(dialog, details.applicationId())
             ));
-            finishProcessingButton.setDisable(true);
+            finishProcessingButton.setOnAction(event -> openFinishProcessingDialog(
+                    finishProcessingButton.getScene().getWindow(),
+                    details.applicationId(),
+                    details.fullName(),
+                    details.programName(),
+                    () -> refreshDetailsDialog(dialog, details.applicationId())
+            ));
             return new HBox(8, recordCommunicationButton, finishProcessingButton);
         }
         return new Label("Application processing is completed.");
@@ -602,6 +619,124 @@ public class ApplicationProcessingView {
         dialog.showAndWait();
     }
 
+    private void openFinishProcessingDialog(
+            Window owner,
+            Integer applicationId,
+            String applicantName,
+            String programName,
+            Runnable onSaved
+    ) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Finish Application Processing");
+        dialog.setHeaderText("Finish Application Processing");
+        dialog.initOwner(owner);
+
+        ButtonType finishButtonType = new ButtonType("Finish", ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, finishButtonType);
+
+        ToggleGroup finalStatusGroup = new ToggleGroup();
+        VBox finalStatusButtons = new VBox(6);
+        for (ApplicationStatus status : List.of(
+                ApplicationStatus.CONFIRMED,
+                ApplicationStatus.REJECTED,
+                ApplicationStatus.CANCELLED
+        )) {
+            RadioButton radioButton = new RadioButton(formatEnumName(status.name()));
+            radioButton.setToggleGroup(finalStatusGroup);
+            radioButton.setUserData(status);
+            finalStatusButtons.getChildren().add(radioButton);
+        }
+
+        TextArea reasonArea = new TextArea();
+        reasonArea.setPromptText("Add a reason or additional notes for this decision.");
+        reasonArea.setPrefRowCount(4);
+        reasonArea.setWrapText(true);
+
+        Label validationLabel = new Label();
+        validationLabel.setStyle("-fx-text-fill: #b42318;");
+
+        VBox content = new VBox(12);
+        content.setPadding(new Insets(8, 14, 8, 14));
+        content.getChildren().addAll(
+                new Label("Applicant: " + applicantName),
+                new Label("Program: " + programName),
+                new VBox(
+                        6,
+                        tooltipLabel(
+                                "Final Decision",
+                                "Select the final decision for this application."
+                        ),
+                        finalStatusButtons
+                ),
+                labeledControl(
+                        tooltipLabel(
+                                "Reason (optional)",
+                                "Optional explanation for the selected final decision."
+                        ),
+                        reasonArea
+                ),
+                validationLabel
+        );
+
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().setPrefWidth(520);
+
+        Button finishButton = (Button) dialog.getDialogPane().lookupButton(finishButtonType);
+        finishButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+            event.consume();
+
+            Toggle selectedStatus = finalStatusGroup.getSelectedToggle();
+            if (selectedStatus == null) {
+                validationLabel.setText("Please select a final decision.");
+                return;
+            }
+
+            FinishProcessingRequest request = new FinishProcessingRequest(
+                    (ApplicationStatus) selectedStatus.getUserData(),
+                    blankToNull(reasonArea.getText())
+            );
+            finishApplicationProcessing(applicationId, request, finishButton, validationLabel, dialog, onSaved);
+        });
+
+        dialog.showAndWait();
+    }
+
+    private void finishApplicationProcessing(
+            Integer applicationId,
+            FinishProcessingRequest request,
+            Button finishButton,
+            Label validationLabel,
+            Dialog<ButtonType> dialog,
+            Runnable onSaved
+    ) {
+        finishButton.setDisable(true);
+        finishButton.setText("Finishing...");
+        validationLabel.setText("");
+
+        Task<Void> task = new Task<>() {
+            @Override
+            protected Void call() {
+                controller.finishApplicationProcessing(applicationId, request);
+                return null;
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            dialog.close();
+            onSaved.run();
+        });
+        task.setOnFailed(event -> {
+            finishButton.setDisable(false);
+            finishButton.setText("Finish");
+            Throwable exception = task.getException();
+            validationLabel.setText("Could not finish application processing: " + exception.getMessage());
+        });
+
+        Thread thread = new Thread(task, "finish-application-processing");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
     private void saveCommunication(
             Integer applicationId,
             CommunicationRequest request,
@@ -642,6 +777,114 @@ public class ApplicationProcessingView {
         Label label = new Label(text);
         label.setTooltip(new Tooltip(tooltipText));
         return label;
+    }
+
+    private Node eventHistoryPanel(Integer applicationId) {
+        Label state = new Label("Event history is not loaded.");
+        VBox eventsBox = new VBox(6);
+
+        Button loadEventsButton = new Button("Load Event History");
+        loadEventsButton.setOnAction(event ->
+                loadApplicationEvents(applicationId, loadEventsButton, state, eventsBox));
+
+        VBox panel = new VBox(8, loadEventsButton, state, eventsBox);
+        panel.setPadding(new Insets(12));
+        panel.setStyle("""
+                -fx-background-color: #f7f8fa;
+                -fx-border-color: #dde1e6;
+                -fx-border-radius: 6;
+                -fx-background-radius: 6;
+                """);
+        return panel;
+    }
+
+    private void loadApplicationEvents(
+            Integer applicationId,
+            Button loadEventsButton,
+            Label state,
+            VBox eventsBox
+    ) {
+        loadEventsButton.setDisable(true);
+        loadEventsButton.setText("Loading...");
+        state.setText("Loading event history...");
+        eventsBox.getChildren().clear();
+
+        Task<List<ApplicationEventProjection>> task = new Task<>() {
+            @Override
+            protected List<ApplicationEventProjection> call() {
+                return controller.getApplicationEvents(applicationId);
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            loadEventsButton.setDisable(false);
+            loadEventsButton.setText("Refresh Event History");
+            renderApplicationEvents(task.getValue(), state, eventsBox);
+        });
+        task.setOnFailed(event -> {
+            loadEventsButton.setDisable(false);
+            loadEventsButton.setText("Load Event History");
+            Throwable exception = task.getException();
+            state.setText("Could not load event history: " + exception.getMessage());
+        });
+
+        Thread thread = new Thread(task, "load-application-events");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void renderApplicationEvents(
+            List<ApplicationEventProjection> events,
+            Label state,
+            VBox eventsBox
+    ) {
+        eventsBox.getChildren().clear();
+        if (events.isEmpty()) {
+            state.setText("No events found.");
+            return;
+        }
+
+        state.setText(events.size() + " events found");
+        ScrollPane scrollPane = new ScrollPane(eventHistoryTable(events));
+        scrollPane.setFitToWidth(true);
+        scrollPane.setMaxHeight(180);
+        scrollPane.setStyle("-fx-background-color: transparent;");
+        eventsBox.getChildren().add(scrollPane);
+    }
+
+    private Node eventHistoryTable(List<ApplicationEventProjection> events) {
+        GridPane grid = new GridPane();
+        grid.setHgap(12);
+        grid.setVgap(6);
+        grid.setPadding(new Insets(8));
+        grid.setStyle("-fx-background-color: white; -fx-border-color: #dde1e6;");
+
+        addEventHeader(grid, 0, "Date/Time");
+        addEventHeader(grid, 1, "Event Type");
+        addEventHeader(grid, 2, "Description");
+
+        for (int index = 0; index < events.size(); index++) {
+            ApplicationEventProjection event = events.get(index);
+            int row = index + 1;
+            addEventCell(grid, 0, row, event.eventTime().format(DATE_TIME_FORMATTER), 120);
+            addEventCell(grid, 1, row, event.eventType(), 120);
+            addEventCell(grid, 2, row, valueOrDash(event.description()), 250);
+        }
+
+        return grid;
+    }
+
+    private void addEventHeader(GridPane grid, int column, String text) {
+        Label label = new Label(text);
+        label.setStyle("-fx-font-weight: 700; -fx-text-fill: #374151;");
+        grid.add(label, column, 0);
+    }
+
+    private void addEventCell(GridPane grid, int column, int row, String text, double maxWidth) {
+        Label label = new Label(text);
+        label.setWrapText(true);
+        label.setMaxWidth(maxWidth);
+        grid.add(label, column, row);
     }
 
     private void showError(Window owner, String message) {

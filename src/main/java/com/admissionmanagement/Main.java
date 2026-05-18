@@ -19,7 +19,10 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import java.util.TimeZone;
+
 public class Main extends Application {
+    private static final String APPLICATION_TIME_ZONE = "Europe/Kyiv";
 
     @Override
     public void start(Stage stage) {
@@ -56,6 +59,7 @@ public class Main extends Application {
     }
 
     public static void main(String[] args) {
+        TimeZone.setDefault(TimeZone.getTimeZone(APPLICATION_TIME_ZONE));
         launch(args);
     }
 
