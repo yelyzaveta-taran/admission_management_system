@@ -80,6 +80,18 @@ public class Application {
     }
 
     public void startProcessing() {
+        if (status != ApplicationStatus.PENDING) {
+            throw new IllegalStateException("Only pending applications can be started for processing");
+        }
+
+        ApplicationStatus previousStatus = status;
+        status = ApplicationStatus.IN_PROGRESS;
+        newEvents.add(new StatusChangeEvent(
+                previousStatus,
+                status,
+                "Заявку взято в опрацювання",
+                LocalDateTime.now()
+        ));
     }
 
     public void finishProcessing() {
@@ -89,5 +101,6 @@ public class Application {
     }
 
     public void clearNewEvents() {
+        newEvents.clear();
     }
 }

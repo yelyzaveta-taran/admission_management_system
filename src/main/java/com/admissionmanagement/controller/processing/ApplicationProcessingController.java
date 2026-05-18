@@ -27,4 +27,8 @@ public class ApplicationProcessingController {
     public Optional<ApplicationDetailsProjection> getApplicationDetails(Integer applicationId) {
         return applicationProcessingService.getApplicationDetails(applicationId);
     }
+
+    public void startApplicationProcessing(Integer applicationId) {
+        applicationProcessingService.startApplicationProcessing(applicationId);
+    }
 }

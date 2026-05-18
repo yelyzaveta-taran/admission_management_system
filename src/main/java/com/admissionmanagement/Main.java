@@ -3,8 +3,10 @@ package com.admissionmanagement;
 import com.admissionmanagement.application.processing.ApplicationProcessingService;
 import com.admissionmanagement.controller.processing.ApplicationProcessingController;
 import com.admissionmanagement.infrastructure.config.DatabaseConnectionFactory;
+import com.admissionmanagement.infrastructure.repository.JdbcApplicationRepository;
 import com.admissionmanagement.infrastructure.repository.JdbcApplicationQueryRepository;
 import com.admissionmanagement.repository.ApplicationQueryRepository;
+import com.admissionmanagement.repository.ApplicationRepository;
 import com.admissionmanagement.ui.ApplicationProcessingView;
 
 import javafx.application.Application;
@@ -21,9 +23,12 @@ public class Main extends Application {
 
     @Override
     public void start(Stage stage) {
+        DatabaseConnectionFactory connectionFactory = DatabaseConnectionFactory.fromApplicationProperties();
+        ApplicationRepository applicationRepository = new JdbcApplicationRepository(connectionFactory);
         ApplicationQueryRepository queryRepository =
-                new JdbcApplicationQueryRepository(DatabaseConnectionFactory.fromApplicationProperties());
-        ApplicationProcessingService processingService = new ApplicationProcessingService(queryRepository);
+                new JdbcApplicationQueryRepository(connectionFactory);
+        ApplicationProcessingService processingService =
+                new ApplicationProcessingService(applicationRepository, queryRepository);
         ApplicationProcessingController processingController = new ApplicationProcessingController(processingService);
         ApplicationProcessingView processingView = new ApplicationProcessingView(processingController);
 

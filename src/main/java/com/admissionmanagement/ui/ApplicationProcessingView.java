@@ -281,7 +281,10 @@ public class ApplicationProcessingView {
         detailsButton.setOnAction(event -> loadApplicationDetails(application.applicationId(), detailsButton));
         actions.getChildren().add(detailsButton);
         if (scope == ApplicationScope.PENDING) {
-            actions.getChildren().add(new Button("Start Processing"));
+            Button startProcessingButton = new Button("Start Processing");
+            startProcessingButton.setOnAction(event ->
+                    startApplicationProcessing(application.applicationId(), startProcessingButton));
+            actions.getChildren().add(startProcessingButton);
         } else if (scope == ApplicationScope.IN_PROGRESS) {
             actions.getChildren().addAll(new Button("Record communication"), new Button("Finish Processing"));
         }
@@ -320,6 +323,32 @@ public class ApplicationProcessingView {
         });
 
         Thread thread = new Thread(task, "load-application-details");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private void startApplicationProcessing(Integer applicationId, Button startProcessingButton) {
+        Window owner = startProcessingButton.getScene().getWindow();
+        startProcessingButton.setDisable(true);
+        startProcessingButton.setText("Starting...");
+
+        Task<Void> task = new Task<>() {
+            @Override
+            protected Void call() {
+                controller.startApplicationProcessing(applicationId);
+                return null;
+            }
+        };
+
+        task.setOnSucceeded(event -> loadApplications(selectedScope()));
+        task.setOnFailed(event -> {
+            startProcessingButton.setDisable(false);
+            startProcessingButton.setText("Start Processing");
+            Throwable exception = task.getException();
+            showError(owner, "Could not start application processing: " + exception.getMessage());
+        });
+
+        Thread thread = new Thread(task, "start-application-processing");
         thread.setDaemon(true);
         thread.start();
     }
