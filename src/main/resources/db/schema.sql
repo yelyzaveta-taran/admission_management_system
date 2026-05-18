@@ -24,9 +24,11 @@ CREATE TABLE application (
     status_id INT NOT NULL,
     datetime TIMESTAMPTZ NOT NULL,
     CONSTRAINT fk_application_program
-        FOREIGN KEY (program_id) REFERENCES educational_program (program_id),
+        FOREIGN KEY (program_id) REFERENCES educational_program (program_id)
+        ON DELETE RESTRICT,
     CONSTRAINT fk_application_status
         FOREIGN KEY (status_id) REFERENCES application_status (status_id)
+        ON DELETE RESTRICT
 );
 
 CREATE TABLE application_communication (
@@ -42,6 +44,7 @@ CREATE TABLE application_communication (
     datetime TIMESTAMPTZ NOT NULL,
     CONSTRAINT fk_application_communication_application
         FOREIGN KEY (application_id) REFERENCES application (application_id)
+        ON DELETE CASCADE
 );
 
 CREATE TABLE application_status_change (
@@ -52,11 +55,14 @@ CREATE TABLE application_status_change (
     reason TEXT,
     datetime TIMESTAMPTZ NOT NULL,
     CONSTRAINT fk_status_change_application
-        FOREIGN KEY (application_id) REFERENCES application (application_id),
+        FOREIGN KEY (application_id) REFERENCES application (application_id)
+        ON DELETE CASCADE,
     CONSTRAINT fk_status_change_previous_status
-        FOREIGN KEY (previous_status_id) REFERENCES application_status (status_id),
+        FOREIGN KEY (previous_status_id) REFERENCES application_status (status_id)
+        ON DELETE RESTRICT,
     CONSTRAINT fk_status_change_new_status
-        FOREIGN KEY (new_status_id) REFERENCES application_status (status_id),
+        FOREIGN KEY (new_status_id) REFERENCES application_status (status_id)
+        ON DELETE RESTRICT,
     CONSTRAINT chk_status_change_different_statuses
         CHECK (previous_status_id <> new_status_id)
 );
