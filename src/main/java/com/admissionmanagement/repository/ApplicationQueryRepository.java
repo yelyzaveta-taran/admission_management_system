@@ -25,7 +25,7 @@ public interface ApplicationQueryRepository {
 
     List<ApplicationEventProjection> findEventsByApplicationId(Integer applicationId);
 
-    List<ApplicationEventProjection> findAllEvents();
+    List<ApplicationEventProjection> findAllApplicationEvents();
 
     List<ApplicationSubmissionStatsProjection> countByPeriod(
             LocalDateTime dateFrom,

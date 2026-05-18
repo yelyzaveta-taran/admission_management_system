@@ -35,6 +35,10 @@ public class ApplicationProcessingController {
         return applicationProcessingService.getApplicationEvents(applicationId);
     }
 
+    public List<ApplicationEventProjection> getAllApplicationEvents() {
+        return applicationProcessingService.getAllApplicationEvents();
+    }
+
     public void startApplicationProcessing(Integer applicationId) {
         applicationProcessingService.startApplicationProcessing(applicationId);
     }

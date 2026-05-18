@@ -8,6 +8,7 @@ import com.admissionmanagement.infrastructure.repository.JdbcApplicationQueryRep
 import com.admissionmanagement.repository.ApplicationQueryRepository;
 import com.admissionmanagement.repository.ApplicationRepository;
 import com.admissionmanagement.ui.ApplicationProcessingView;
+import com.admissionmanagement.ui.EventJournalView;
 
 import javafx.application.Application;
 import javafx.scene.Scene;
@@ -34,9 +35,10 @@ public class Main extends Application {
                 new ApplicationProcessingService(applicationRepository, queryRepository);
         ApplicationProcessingController processingController = new ApplicationProcessingController(processingService);
         ApplicationProcessingView processingView = new ApplicationProcessingView(processingController);
+        EventJournalView eventJournalView = new EventJournalView(processingController);
 
         BorderPane root = new BorderPane();
-        root.setLeft(createSidebar());
+        root.setLeft(createSidebar(root, processingView, eventJournalView));
         root.setCenter(processingView.getRoot());
 
         Scene scene = new Scene(root, 1100, 720);
@@ -63,16 +65,32 @@ public class Main extends Application {
         launch(args);
     }
 
-    private VBox createSidebar() {
+    private VBox createSidebar(
+            BorderPane root,
+            ApplicationProcessingView processingView,
+            EventJournalView eventJournalView
+    ) {
         Label title = new Label("Admissions");
         title.setStyle("-fx-font-size: 18px; -fx-font-weight: 700; -fx-text-fill: white;");
 
         Button processingButton = createNavigationButton("Processing");
-        processingButton.setDisable(true);
         Button journalButton = createNavigationButton("Event Journal");
-        journalButton.setDisable(true);
         Button analyticsButton = createNavigationButton("Analytics");
         analyticsButton.setDisable(true);
+
+        processingButton.setOnAction(event -> {
+            root.setCenter(processingView.getRoot());
+            processingButton.setDisable(true);
+            journalButton.setDisable(false);
+            processingView.loadInitialApplications();
+        });
+        journalButton.setOnAction(event -> {
+            root.setCenter(eventJournalView.getRoot());
+            journalButton.setDisable(true);
+            processingButton.setDisable(false);
+            eventJournalView.loadEvents();
+        });
+        processingButton.setDisable(true);
 
         VBox sidebar = new VBox(10, title, processingButton, journalButton, analyticsButton);
         sidebar.setPrefWidth(190);

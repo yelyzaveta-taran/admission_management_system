@@ -149,7 +149,7 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
     }
 
     @Override
-    public List<ApplicationEventProjection> findAllEvents() {
+    public List<ApplicationEventProjection> findAllApplicationEvents() {
         return findEvents("", List.of());
     }
 
@@ -307,27 +307,22 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                     SELECT ac.application_id,
                            ac.datetime AS event_time,
                            'COMMUNICATION' AS event_type,
-                           concat_ws(' - ', concat(ac.channel, ': ', ac.result), ac.comment) AS description,
-                           ac.event_id AS event_id
+                           'Channel: ' || ac.channel
+                               || ', result: ' || ac.result
+                               || COALESCE(', comment: ' || ac.comment, '') AS description
                     FROM application_communication ac
                     UNION ALL
-                    SELECT ascg.application_id,
-                           ascg.datetime AS event_time,
+                    SELECT sc.application_id,
+                           sc.datetime AS event_time,
                            'STATUS_CHANGE' AS event_type,
-                           concat_ws(
-                               ' - ',
-                               concat(previous_status.name, ' -> ', new_status.name),
-                               ascg.reason
-                           ) AS description,
-                           ascg.event_id AS event_id
-                    FROM application_status_change ascg
-                    JOIN application_status previous_status
-                        ON previous_status.status_id = ascg.previous_status_id
-                    JOIN application_status new_status
-                        ON new_status.status_id = ascg.new_status_id
+                           'Status changed from ' || ps.name || ' to ' || ns.name
+                               || COALESCE(', reason: ' || sc.reason, '') AS description
+                    FROM application_status_change sc
+                    JOIN application_status ps ON ps.status_id = sc.previous_status_id
+                    JOIN application_status ns ON ns.status_id = sc.new_status_id
                 ) event_source
                 %s
-                ORDER BY event_source.event_time DESC, event_source.event_id DESC
+                ORDER BY event_source.event_time DESC
                 """.formatted(filterClause);
 
         try (Connection connection = connectionFactory.getConnection();

@@ -43,6 +43,10 @@ public class ApplicationProcessingService {
         return applicationQueryRepository.findEventsByApplicationId(applicationId);
     }
 
+    public List<ApplicationEventProjection> getAllApplicationEvents() {
+        return applicationQueryRepository.findAllApplicationEvents();
+    }
+
     public void startApplicationProcessing(Integer applicationId) {
         Objects.requireNonNull(applicationId);
         Application application = applicationRepository.findById(applicationId)
