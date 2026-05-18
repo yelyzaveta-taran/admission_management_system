@@ -30,6 +30,7 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Toggle;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
@@ -173,6 +174,11 @@ public class ApplicationProcessingView {
 
     private Node labeledControl(String labelText, Node control) {
         Label label = new Label(labelText);
+        label.setStyle("-fx-font-size: 12px; -fx-text-fill: #4b5563;");
+        return labeledControl(label, control);
+    }
+
+    private Node labeledControl(Label label, Node control) {
         label.setStyle("-fx-font-size: 12px; -fx-text-fill: #4b5563;");
 
         if (control instanceof Region region) {
@@ -522,7 +528,7 @@ public class ApplicationProcessingView {
         ToggleGroup resultGroup = new ToggleGroup();
         VBox resultButtons = new VBox(6);
         for (CommunicationResult result : CommunicationResult.values()) {
-            RadioButton radioButton = new RadioButton(result.name());
+            RadioButton radioButton = new RadioButton(formatEnumName(result.name()));
             radioButton.setToggleGroup(resultGroup);
             radioButton.setUserData(result);
             resultButtons.getChildren().add(radioButton);
@@ -541,9 +547,28 @@ public class ApplicationProcessingView {
         content.getChildren().addAll(
                 new Label("Applicant: " + applicantName),
                 new Label("Program: " + programName),
-                labeledControl("Communication Channel", channelBox),
-                new VBox(6, new Label("Communication Result"), resultButtons),
-                labeledControl("Comment (optional)", commentArea),
+                labeledControl(
+                        tooltipLabel(
+                                "Communication Method",
+                                "Select the communication method used to contact the applicant."
+                        ),
+                        channelBox
+                ),
+                new VBox(
+                        6,
+                        tooltipLabel(
+                                "Communication Result",
+                                "Select the outcome of the communication attempt."
+                        ),
+                        resultButtons
+                ),
+                labeledControl(
+                        tooltipLabel(
+                                "Comment (optional)",
+                                "Optional notes about the conversation, applicant response, or follow-up details."
+                        ),
+                        commentArea
+                ),
                 validationLabel
         );
 
@@ -613,6 +638,12 @@ public class ApplicationProcessingView {
         thread.start();
     }
 
+    private Label tooltipLabel(String text, String tooltipText) {
+        Label label = new Label(text);
+        label.setTooltip(new Tooltip(tooltipText));
+        return label;
+    }
+
     private void showError(Window owner, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR, message, ButtonType.OK);
         alert.setHeaderText(null);
@@ -624,7 +655,7 @@ public class ApplicationProcessingView {
         if (result == null) {
             return "None";
         }
-        return result.name();
+        return formatEnumName(result.name());
     }
 
     private String valueOrDash(Object value) {
@@ -636,6 +667,10 @@ public class ApplicationProcessingView {
             return "-";
         }
         return text;
+    }
+
+    private String formatEnumName(String value) {
+        return value.replace('_', ' ');
     }
 
     private String formatLastCommunication(ApplicationSummaryProjection application) {
