@@ -3,10 +3,12 @@ package com.admissionmanagement.controller.processing;
 import com.admissionmanagement.application.processing.ApplicationProcessingService;
 import com.admissionmanagement.application.processing.ApplicationScope;
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
+import com.admissionmanagement.projection.ApplicationDetailsProjection;
 import com.admissionmanagement.projection.ApplicationSummaryProjection;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public class ApplicationProcessingController {
     private final ApplicationProcessingService applicationProcessingService;
@@ -20,5 +22,9 @@ public class ApplicationProcessingController {
             ApplicationSearchCriteria criteria
     ) {
         return applicationProcessingService.getApplications(scope, criteria);
+    }
+
+    public Optional<ApplicationDetailsProjection> getApplicationDetails(Integer applicationId) {
+        return applicationProcessingService.getApplicationDetails(applicationId);
     }
 }

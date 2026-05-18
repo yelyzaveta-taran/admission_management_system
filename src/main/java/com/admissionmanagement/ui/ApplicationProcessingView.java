@@ -2,17 +2,22 @@ package com.admissionmanagement.ui;
 
 import com.admissionmanagement.application.processing.ApplicationScope;
 import com.admissionmanagement.controller.processing.ApplicationProcessingController;
+import com.admissionmanagement.domain.application.ApplicationStatus;
 import com.admissionmanagement.domain.application.CommunicationResult;
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
+import com.admissionmanagement.projection.ApplicationDetailsProjection;
 import com.admissionmanagement.projection.ApplicationSummaryProjection;
 
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DatePicker;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Tab;
@@ -20,10 +25,12 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.stage.Window;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,6 +38,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public class ApplicationProcessingView {
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
@@ -269,7 +277,9 @@ public class ApplicationProcessingView {
 
         HBox actions = new HBox(8);
         actions.setAlignment(Pos.CENTER_LEFT);
-        actions.getChildren().add(new Button("Details"));
+        Button detailsButton = new Button("Details");
+        detailsButton.setOnAction(event -> loadApplicationDetails(application.applicationId(), detailsButton));
+        actions.getChildren().add(detailsButton);
         if (scope == ApplicationScope.PENDING) {
             actions.getChildren().add(new Button("Start Processing"));
         } else if (scope == ApplicationScope.IN_PROGRESS) {
@@ -280,10 +290,156 @@ public class ApplicationProcessingView {
         return card;
     }
 
-    private String formatLastCommunication(ApplicationSummaryProjection application) {
-        if (application.lastCommunicationResult() == null) {
+    private void loadApplicationDetails(Integer applicationId, Button detailsButton) {
+        Window owner = detailsButton.getScene().getWindow();
+        detailsButton.setDisable(true);
+        detailsButton.setText("Loading...");
+
+        Task<Optional<ApplicationDetailsProjection>> task = new Task<>() {
+            @Override
+            protected Optional<ApplicationDetailsProjection> call() {
+                return controller.getApplicationDetails(applicationId);
+            }
+        };
+
+        task.setOnSucceeded(event -> {
+            detailsButton.setDisable(false);
+            detailsButton.setText("Details");
+            Optional<ApplicationDetailsProjection> details = task.getValue();
+            if (details.isEmpty()) {
+                showError(owner, "Application was not found.");
+                return;
+            }
+            createDetailsDialog(owner, details.get()).showAndWait();
+        });
+        task.setOnFailed(event -> {
+            detailsButton.setDisable(false);
+            detailsButton.setText("Details");
+            Throwable exception = task.getException();
+            showError(owner, "Could not load application details: " + exception.getMessage());
+        });
+
+        Thread thread = new Thread(task, "load-application-details");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    private Dialog<ButtonType> createDetailsDialog(Window owner, ApplicationDetailsProjection details) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Application Details");
+        dialog.setHeaderText(details.fullName());
+        dialog.initOwner(owner);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.getDialogPane().setContent(createDetailsContent(details));
+        dialog.getDialogPane().setPrefWidth(560);
+        return dialog;
+    }
+
+    private Node createDetailsContent(ApplicationDetailsProjection details) {
+        VBox content = new VBox(18);
+        content.setPadding(new Insets(8, 14, 8, 14));
+        content.getChildren().addAll(
+                section("Applicant Information", applicantDetailsGrid(details)),
+                section("Application Information", applicationDetailsGrid(details)),
+                section("Actions", actionControls(details.status()))
+        );
+        return content;
+    }
+
+    private Node applicantDetailsGrid(ApplicationDetailsProjection details) {
+        GridPane grid = detailsGrid();
+        addDetailRow(grid, 0, "Full name", details.fullName());
+        addDetailRow(grid, 1, "Phone", details.phone());
+        addDetailRow(grid, 2, "Email", details.email());
+        return grid;
+    }
+
+    private Node applicationDetailsGrid(ApplicationDetailsProjection details) {
+        GridPane grid = detailsGrid();
+        addDetailRow(grid, 0, "Application id", details.applicationId());
+        addDetailRow(grid, 1, "Program", details.programName());
+        addDetailRow(grid, 2, "Status", details.status());
+        addDetailRow(grid, 3, "Created at", details.createdAt().format(DATE_TIME_FORMATTER));
+        addDetailRow(grid, 4, "Comment", valueOrDash(details.comment()));
+        addDetailRow(grid, 5, "Last communication", formatLastCommunication(details.lastCommunicationResult()));
+        return grid;
+    }
+
+    private GridPane detailsGrid() {
+        GridPane grid = new GridPane();
+        grid.setHgap(14);
+        grid.setVgap(8);
+        grid.setPadding(new Insets(12));
+        grid.setStyle("""
+                -fx-background-color: #f7f8fa;
+                -fx-border-color: #dde1e6;
+                -fx-border-radius: 6;
+                -fx-background-radius: 6;
+                """);
+        return grid;
+    }
+
+    private void addDetailRow(GridPane grid, int row, String labelText, Object value) {
+        Label label = new Label(labelText + ":");
+        label.setMinWidth(120);
+        label.setStyle("-fx-font-weight: 700; -fx-text-fill: #374151;");
+
+        Label valueLabel = new Label(valueOrDash(value));
+        valueLabel.setWrapText(true);
+        valueLabel.setMaxWidth(360);
+
+        grid.add(label, 0, row);
+        grid.add(valueLabel, 1, row);
+    }
+
+    private Node section(String titleText, Node content) {
+        Label title = new Label(titleText);
+        title.setStyle("-fx-font-size: 14px; -fx-font-weight: 700;");
+        return new VBox(8, title, content);
+    }
+
+    private Node actionControls(ApplicationStatus status) {
+        if (status == ApplicationStatus.PENDING) {
+            Button startProcessingButton = new Button("Start Processing");
+            startProcessingButton.setDisable(true);
+            return new HBox(8, startProcessingButton);
+        }
+        if (status == ApplicationStatus.IN_PROGRESS) {
+            Button recordCommunicationButton = new Button("Record Communication");
+            Button finishProcessingButton = new Button("Finish Processing");
+            recordCommunicationButton.setDisable(true);
+            finishProcessingButton.setDisable(true);
+            return new HBox(8, recordCommunicationButton, finishProcessingButton);
+        }
+        return new Label("Application processing is completed.");
+    }
+
+    private void showError(Window owner, String message) {
+        Alert alert = new Alert(Alert.AlertType.ERROR, message, ButtonType.OK);
+        alert.setHeaderText(null);
+        alert.initOwner(owner);
+        alert.showAndWait();
+    }
+
+    private String formatLastCommunication(CommunicationResult result) {
+        if (result == null) {
             return "None";
         }
-        return application.lastCommunicationResult().name();
+        return result.name();
+    }
+
+    private String valueOrDash(Object value) {
+        if (value == null) {
+            return "-";
+        }
+        String text = String.valueOf(value);
+        if (text.isBlank()) {
+            return "-";
+        }
+        return text;
+    }
+
+    private String formatLastCommunication(ApplicationSummaryProjection application) {
+        return formatLastCommunication(application.lastCommunicationResult());
     }
 }
