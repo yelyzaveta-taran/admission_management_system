@@ -462,7 +462,8 @@ public class ApplicationProcessingView {
     private Node actionControls(Dialog<ButtonType> dialog, ApplicationDetailsProjection details) {
         if (details.status() == ApplicationStatus.PENDING) {
             Button startProcessingButton = new Button("Start Processing");
-            startProcessingButton.setDisable(true);
+            startProcessingButton.setOnAction(event ->
+                    startApplicationProcessingFromDetails(dialog, details.applicationId(), startProcessingButton));
             return new HBox(8, startProcessingButton);
         }
         if (details.status() == ApplicationStatus.IN_PROGRESS) {
@@ -485,6 +486,35 @@ public class ApplicationProcessingView {
             return new HBox(8, recordCommunicationButton, finishProcessingButton);
         }
         return new Label("Application processing is completed.");
+    }
+
+    private void startApplicationProcessingFromDetails(
+            Dialog<ButtonType> dialog,
+            Integer applicationId,
+            Button startProcessingButton
+    ) {
+        startProcessingButton.setDisable(true);
+        startProcessingButton.setText("Starting...");
+
+        Task<Void> task = new Task<>() {
+            @Override
+            protected Void call() {
+                controller.startApplicationProcessing(applicationId);
+                return null;
+            }
+        };
+
+        task.setOnSucceeded(event -> refreshDetailsDialog(dialog, applicationId));
+        task.setOnFailed(event -> {
+            startProcessingButton.setDisable(false);
+            startProcessingButton.setText("Start Processing");
+            Throwable exception = task.getException();
+            showError(dialog.getOwner(), "Could not start application processing: " + exception.getMessage());
+        });
+
+        Thread thread = new Thread(task, "start-application-processing-from-details");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     private void refreshDetailsDialog(Dialog<ButtonType> dialog, Integer applicationId) {
@@ -896,7 +926,7 @@ public class ApplicationProcessingView {
 
     private String formatLastCommunication(CommunicationResult result) {
         if (result == null) {
-            return "None";
+            return "No communications yet";
         }
         return formatEnumName(result.name());
     }

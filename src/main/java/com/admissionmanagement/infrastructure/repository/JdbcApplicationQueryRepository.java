@@ -196,12 +196,20 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
             LocalDateTime dateTo
     ) {
         String sql = """
-                SELECT ac.result,
+                SELECT primary_communication.result,
                        count(*) AS communications_count
-                FROM application_communication ac
-                WHERE ac.datetime >= ? AND ac.datetime <= ?
-                GROUP BY ac.result
-                ORDER BY ac.result
+                FROM (
+                    SELECT DISTINCT ON (ac.application_id)
+                           ac.application_id,
+                           ac.result,
+                           ac.datetime
+                    FROM application_communication ac
+                    ORDER BY ac.application_id, ac.datetime, ac.event_id
+                ) primary_communication
+                WHERE primary_communication.datetime >= ?
+                  AND primary_communication.datetime <= ?
+                GROUP BY primary_communication.result
+                ORDER BY primary_communication.result
                 """;
 
         try (Connection connection = connectionFactory.getConnection();
@@ -230,13 +238,22 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
             LocalDateTime dateTo
     ) {
         String sql = """
-                SELECT ac.channel,
-                       ac.result,
+                SELECT primary_communication.channel,
+                       primary_communication.result,
                        count(*) AS communications_count
-                FROM application_communication ac
-                WHERE ac.datetime >= ? AND ac.datetime <= ?
-                GROUP BY ac.channel, ac.result
-                ORDER BY ac.channel, ac.result
+                FROM (
+                    SELECT DISTINCT ON (ac.application_id)
+                           ac.application_id,
+                           ac.channel,
+                           ac.result,
+                           ac.datetime
+                    FROM application_communication ac
+                    ORDER BY ac.application_id, ac.datetime, ac.event_id
+                ) primary_communication
+                WHERE primary_communication.datetime >= ?
+                  AND primary_communication.datetime <= ?
+                GROUP BY primary_communication.channel, primary_communication.result
+                ORDER BY primary_communication.channel, primary_communication.result
                 """;
 
         try (Connection connection = connectionFactory.getConnection();
@@ -266,15 +283,15 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
             LocalDateTime dateTo
     ) {
         String sql = """
-                SELECT s.name AS status_name,
+                SELECT ns.name AS status_name,
                        count(*) AS applications_count
-                FROM application a
-                JOIN application_status s ON s.status_id = a.status_id
-                WHERE a.datetime >= ?
-                  AND a.datetime <= ?
-                  AND s.name IN ('CONFIRMED', 'REJECTED', 'CANCELLED')
-                GROUP BY s.name
-                ORDER BY s.name
+                FROM application_status_change sc
+                JOIN application_status ns ON ns.status_id = sc.new_status_id
+                WHERE sc.datetime >= ?
+                  AND sc.datetime <= ?
+                  AND ns.name IN ('CONFIRMED', 'REJECTED', 'CANCELLED')
+                GROUP BY ns.name
+                ORDER BY ns.name
                 """;
 
         try (Connection connection = connectionFactory.getConnection();
