@@ -10,7 +10,7 @@ import com.admissionmanagement.infrastructure.repository.JdbcApplicationQueryRep
 import com.admissionmanagement.repository.ApplicationQueryRepository;
 import com.admissionmanagement.repository.ApplicationRepository;
 import com.admissionmanagement.ui.view.analytics.AnalyticsDashboardView;
-import com.admissionmanagement.ui.view.EventJournalView;
+import com.admissionmanagement.ui.view.eventjournal.EventJournalView;
 import com.admissionmanagement.ui.view.processing.ApplicationProcessingView;
 
 import javafx.application.Application;
