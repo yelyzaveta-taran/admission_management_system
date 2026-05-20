@@ -1,4 +1,4 @@
-package com.admissionmanagement.ui;
+package com.admissionmanagement.ui.view;
 
 import com.admissionmanagement.controller.processing.ApplicationProcessingController;
 import com.admissionmanagement.projection.ApplicationEventProjection;
