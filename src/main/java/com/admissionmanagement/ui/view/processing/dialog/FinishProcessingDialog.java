@@ -135,16 +135,16 @@ public final class FinishProcessingDialog {
             Runnable onSaved
     ) {
         Toggle selectedStatus = finalStatusGroup.getSelectedToggle();
-        if (selectedStatus == null) {
-            validationLabel.setText("Please select a final decision.");
+        FinishProcessingFormValidator.ValidationResult validationResult = FinishProcessingFormValidator.validate(
+                selectedStatus == null ? null : (ApplicationStatus) selectedStatus.getUserData(),
+                reasonArea.getText()
+        );
+        if (!validationResult.isValid()) {
+            validationLabel.setText(validationResult.errorMessage());
             return;
         }
 
-        FinishProcessingRequest request = new FinishProcessingRequest(
-                (ApplicationStatus) selectedStatus.getUserData(),
-                ApplicationProcessingUiSupport.trimToNull(reasonArea.getText())
-        );
-        finishApplicationProcessing(applicationId, request, finishButton, validationLabel, dialog, onSaved);
+        finishApplicationProcessing(applicationId, validationResult.request(), finishButton, validationLabel, dialog, onSaved);
     }
 
     private void finishApplicationProcessing(

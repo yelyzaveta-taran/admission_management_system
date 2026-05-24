@@ -150,23 +150,18 @@ public final class CommunicationDialog {
             Runnable onSaved
     ) {
         CommunicationChannel channel = channelBox.getValue();
-        if (channel == null) {
-            validationLabel.setText("Please select communication channel.");
-            return;
-        }
-
         Toggle selectedResult = resultGroup.getSelectedToggle();
-        if (selectedResult == null) {
-            validationLabel.setText("Please select communication result.");
+        CommunicationFormValidator.ValidationResult validationResult = CommunicationFormValidator.validate(
+                channel,
+                selectedResult == null ? null : (CommunicationResult) selectedResult.getUserData(),
+                commentArea.getText()
+        );
+        if (!validationResult.isValid()) {
+            validationLabel.setText(validationResult.errorMessage());
             return;
         }
 
-        CommunicationRequest request = new CommunicationRequest(
-                channel,
-                (CommunicationResult) selectedResult.getUserData(),
-                ApplicationProcessingUiSupport.trimToNull(commentArea.getText())
-        );
-        saveCommunication(applicationId, request, saveButton, validationLabel, dialog, onSaved);
+        saveCommunication(applicationId, validationResult.request(), saveButton, validationLabel, dialog, onSaved);
     }
 
     private void saveCommunication(
