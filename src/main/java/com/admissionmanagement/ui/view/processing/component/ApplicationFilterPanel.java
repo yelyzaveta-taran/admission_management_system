@@ -2,6 +2,7 @@ package com.admissionmanagement.ui.view.processing.component;
 
 import com.admissionmanagement.domain.application.CommunicationResult;
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
+import com.admissionmanagement.dto.LastCommunicationFilterMode;
 import com.admissionmanagement.ui.view.processing.support.ApplicationProcessingUiSupport;
 
 import javafx.geometry.Insets;
@@ -23,7 +24,7 @@ public final class ApplicationFilterPanel {
     private final TextField emailField;
     private final DatePicker dateFromPicker;
     private final DatePicker dateToPicker;
-    private final ComboBox<CommunicationResult> communicationResultBox;
+    private final ComboBox<LastCommunicationFilterOption> communicationResultBox;
     private final FlowPane root;
 
     public ApplicationFilterPanel(Runnable onSearch) {
@@ -45,11 +46,13 @@ public final class ApplicationFilterPanel {
         LocalDate toDate = dateToPicker.getValue();
         LocalDateTime dateFrom = fromDate == null ? null : fromDate.atStartOfDay();
         LocalDateTime dateTo = toDate == null ? null : toDate.atTime(LocalTime.MAX);
+        LastCommunicationFilterOption selectedOption = communicationResultBox.getValue();
 
         return new ApplicationSearchCriteria(
                 ApplicationProcessingUiSupport.trimToNull(phoneField.getText()),
                 ApplicationProcessingUiSupport.trimToNull(emailField.getText()),
-                communicationResultBox.getValue(),
+                selectedOption == null ? null : selectedOption.result(),
+                selectedOption == null ? LastCommunicationFilterMode.ANY : selectedOption.mode(),
                 dateFrom,
                 dateTo
         );
@@ -85,7 +88,7 @@ public final class ApplicationFilterPanel {
         dateFromPicker.setPromptText("Date from");
         dateToPicker.setPromptText("Date to");
         communicationResultBox.setPromptText("Last result");
-        communicationResultBox.getItems().setAll(CommunicationResult.values());
+        communicationResultBox.getItems().setAll(createCommunicationFilterOptions());
     }
 
     private Button createSearchButton() {
@@ -110,5 +113,39 @@ public final class ApplicationFilterPanel {
         dateFromPicker.setValue(null);
         dateToPicker.setValue(null);
         communicationResultBox.setValue(null);
+    }
+
+    private LastCommunicationFilterOption[] createCommunicationFilterOptions() {
+        CommunicationResult[] results = CommunicationResult.values();
+        LastCommunicationFilterOption[] options = new LastCommunicationFilterOption[results.length + 1];
+
+        for (int index = 0; index < results.length; index++) {
+            options[index] = LastCommunicationFilterOption.byResult(results[index]);
+        }
+        options[results.length] = LastCommunicationFilterOption.withoutCommunications();
+        return options;
+    }
+
+    private record LastCommunicationFilterOption(
+            String label,
+            CommunicationResult result,
+            LastCommunicationFilterMode mode
+    ) {
+        private static LastCommunicationFilterOption byResult(CommunicationResult result) {
+            return new LastCommunicationFilterOption(result.name(), result, LastCommunicationFilterMode.BY_RESULT);
+        }
+
+        private static LastCommunicationFilterOption withoutCommunications() {
+            return new LastCommunicationFilterOption(
+                    "No communications yet",
+                    null,
+                    LastCommunicationFilterMode.WITHOUT_COMMUNICATIONS
+            );
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
     }
 }

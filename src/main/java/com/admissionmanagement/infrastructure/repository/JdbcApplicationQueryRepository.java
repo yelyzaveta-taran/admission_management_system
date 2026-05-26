@@ -5,6 +5,7 @@ import com.admissionmanagement.domain.application.ApplicationStatus;
 import com.admissionmanagement.domain.application.CommunicationChannel;
 import com.admissionmanagement.domain.application.CommunicationResult;
 import com.admissionmanagement.dto.ApplicationSearchCriteria;
+import com.admissionmanagement.dto.LastCommunicationFilterMode;
 import com.admissionmanagement.infrastructure.config.DatabaseConnectionFactory;
 import com.admissionmanagement.infrastructure.exception.DataAccessException;
 import com.admissionmanagement.projection.ApplicationDetailsProjection;
@@ -17,7 +18,6 @@ import com.admissionmanagement.projection.FinalResultStatsProjection;
 import com.admissionmanagement.repository.ApplicationQueryRepository;
 
 import java.sql.Connection;
-import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -35,6 +35,14 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
         this.connectionFactory = connectionFactory;
     }
 
+    static SearchQuerySnapshot buildSearchQueryForTest(
+            List<ApplicationStatus> statuses,
+            ApplicationSearchCriteria criteria
+    ) {
+        SqlQuery query = new ApplicationSearchQueryBuilder(statuses, criteria).build();
+        return new SearchQuerySnapshot(query.sql(), query.parameters().size());
+    }
+
     @Override
     public List<ApplicationSummaryProjection> findByCriteria(
             List<ApplicationStatus> statuses,
@@ -44,53 +52,12 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
             return List.of();
         }
 
-        StringBuilder sql = new StringBuilder("""
-                SELECT a.application_id,
-                       concat_ws(' ', a.first_name, a.last_name) AS full_name,
-                       p.name AS program_name,
-                       s.name AS status_name,
-                       lc.result AS last_communication_result,
-                       a.datetime
-                FROM application a
-                JOIN educational_program p ON p.program_id = a.program_id
-                JOIN application_status s ON s.status_id = a.status_id
-                LEFT JOIN LATERAL (
-                    SELECT ac.result
-                    FROM application_communication ac
-                    WHERE ac.application_id = a.application_id
-                    ORDER BY ac.datetime DESC, ac.event_id DESC
-                    LIMIT 1
-                ) lc ON TRUE
-                WHERE s.name IN (
-                """);
-        sql.append(placeholders(statuses.size())).append(")");
-
-        List<SqlParameter> parameters = new ArrayList<>();
-        statuses.forEach(status -> parameters.add(SqlParameter.of(status.name())));
-        appendCriteria(sql, parameters, criteria);
-        sql.append(" ORDER BY a.datetime DESC, a.application_id DESC");
-
-        try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
-            bindParameters(statement, parameters);
-
-            try (ResultSet resultSet = statement.executeQuery()) {
-                List<ApplicationSummaryProjection> applications = new ArrayList<>();
-                while (resultSet.next()) {
-                    applications.add(new ApplicationSummaryProjection(
-                            resultSet.getInt("application_id"),
-                            resultSet.getString("full_name"),
-                            resultSet.getString("program_name"),
-                            ApplicationStatus.valueOf(resultSet.getString("status_name")),
-                            nullableCommunicationResult(resultSet, "last_communication_result"),
-                            resultSet.getTimestamp("datetime").toLocalDateTime()
-                    ));
-                }
-                return applications;
-            }
-        } catch (SQLException exception) {
-            throw new DataAccessException("Failed to find applications by criteria", exception);
-        }
+        SqlQuery query = new ApplicationSearchQueryBuilder(statuses, criteria).build();
+        return executeListQuery(
+                query,
+                this::mapApplicationSummary,
+                "Failed to find applications by criteria"
+        );
     }
 
     @Override
@@ -118,39 +85,24 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                 WHERE a.application_id = ?
                 """;
 
-        try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setInt(1, applicationId);
-
-            try (ResultSet resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    return Optional.empty();
-                }
-                return Optional.of(new ApplicationDetailsProjection(
-                        resultSet.getInt("application_id"),
-                        resultSet.getString("full_name"),
-                        resultSet.getString("program_name"),
-                        resultSet.getString("phone"),
-                        resultSet.getString("email"),
-                        resultSet.getString("comment"),
-                        ApplicationStatus.valueOf(resultSet.getString("status_name")),
-                        nullableCommunicationResult(resultSet, "last_communication_result"),
-                        resultSet.getTimestamp("datetime").toLocalDateTime()
-                ));
-            }
-        } catch (SQLException exception) {
-            throw new DataAccessException("Failed to find application details", exception);
-        }
+        return executeOptionalQuery(
+                new SqlQuery(sql, List.of(SqlParameter.of(applicationId))),
+                this::mapApplicationDetails,
+                "Failed to find application details"
+        );
     }
 
     @Override
     public List<ApplicationEventProjection> findEventsByApplicationId(Integer applicationId) {
-        return findEvents("WHERE event_source.application_id = ?", List.of(SqlParameter.of(applicationId)));
+        return findEventProjections(
+                "WHERE event_source.application_id = ?",
+                List.of(SqlParameter.of(applicationId))
+        );
     }
 
     @Override
     public List<ApplicationEventProjection> findAllApplicationEvents() {
-        return findEvents("", List.of());
+        return findEventProjections("", List.of());
     }
 
     @Override
@@ -159,7 +111,7 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
             LocalDateTime dateTo,
             AnalyticsGrouping grouping
     ) {
-        String datePart = grouping == AnalyticsGrouping.MONTH ? "month" : "day";
+        String periodDatePart = grouping == AnalyticsGrouping.MONTH ? "month" : "day";
         String sql = """
                 SELECT date_trunc('%s', a.datetime)::date AS period_start,
                        count(*) AS applications_count
@@ -167,27 +119,13 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                 WHERE a.datetime >= ? AND a.datetime <= ?
                 GROUP BY period_start
                 ORDER BY period_start
-                """.formatted(datePart);
+                """.formatted(periodDatePart);
 
-        try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.valueOf(dateFrom));
-            statement.setTimestamp(2, Timestamp.valueOf(dateTo));
-
-            try (ResultSet resultSet = statement.executeQuery()) {
-                List<ApplicationSubmissionStatsProjection> stats = new ArrayList<>();
-                while (resultSet.next()) {
-                    Date periodStart = resultSet.getDate("period_start");
-                    stats.add(new ApplicationSubmissionStatsProjection(
-                            periodStart.toLocalDate(),
-                            resultSet.getLong("applications_count")
-                    ));
-                }
-                return stats;
-            }
-        } catch (SQLException exception) {
-            throw new DataAccessException("Failed to count applications by period", exception);
-        }
+        return executeListQuery(
+                new SqlQuery(sql, dateRangeParameters(dateFrom, dateTo)),
+                this::mapSubmissionStats,
+                "Failed to count applications by period"
+        );
     }
 
     @Override
@@ -212,24 +150,11 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                 ORDER BY primary_communication.result
                 """;
 
-        try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.valueOf(dateFrom));
-            statement.setTimestamp(2, Timestamp.valueOf(dateTo));
-
-            try (ResultSet resultSet = statement.executeQuery()) {
-                List<CommunicationResultStatsProjection> stats = new ArrayList<>();
-                while (resultSet.next()) {
-                    stats.add(new CommunicationResultStatsProjection(
-                            CommunicationResult.valueOf(resultSet.getString("result")),
-                            resultSet.getLong("communications_count")
-                    ));
-                }
-                return stats;
-            }
-        } catch (SQLException exception) {
-            throw new DataAccessException("Failed to count communication results", exception);
-        }
+        return executeListQuery(
+                new SqlQuery(sql, dateRangeParameters(dateFrom, dateTo)),
+                this::mapCommunicationResultStats,
+                "Failed to count communication results"
+        );
     }
 
     @Override
@@ -256,25 +181,11 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                 ORDER BY primary_communication.channel, primary_communication.result
                 """;
 
-        try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.valueOf(dateFrom));
-            statement.setTimestamp(2, Timestamp.valueOf(dateTo));
-
-            try (ResultSet resultSet = statement.executeQuery()) {
-                List<ChannelCommunicationResultStatsProjection> stats = new ArrayList<>();
-                while (resultSet.next()) {
-                    stats.add(new ChannelCommunicationResultStatsProjection(
-                            CommunicationChannel.valueOf(resultSet.getString("channel")),
-                            CommunicationResult.valueOf(resultSet.getString("result")),
-                            resultSet.getLong("communications_count")
-                    ));
-                }
-                return stats;
-            }
-        } catch (SQLException exception) {
-            throw new DataAccessException("Failed to count communication results by channel", exception);
-        }
+        return executeListQuery(
+                new SqlQuery(sql, dateRangeParameters(dateFrom, dateTo)),
+                this::mapChannelCommunicationResultStats,
+                "Failed to count communication results by channel"
+        );
     }
 
     @Override
@@ -294,27 +205,17 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                 ORDER BY ns.name
                 """;
 
-        try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.valueOf(dateFrom));
-            statement.setTimestamp(2, Timestamp.valueOf(dateTo));
-
-            try (ResultSet resultSet = statement.executeQuery()) {
-                List<FinalResultStatsProjection> stats = new ArrayList<>();
-                while (resultSet.next()) {
-                    stats.add(new FinalResultStatsProjection(
-                            ApplicationStatus.valueOf(resultSet.getString("status_name")),
-                            resultSet.getLong("applications_count")
-                    ));
-                }
-                return stats;
-            }
-        } catch (SQLException exception) {
-            throw new DataAccessException("Failed to count final processing results", exception);
-        }
+        return executeListQuery(
+                new SqlQuery(sql, dateRangeParameters(dateFrom, dateTo)),
+                this::mapFinalResultStats,
+                "Failed to count final processing results"
+        );
     }
 
-    private List<ApplicationEventProjection> findEvents(String filterClause, List<SqlParameter> parameters) {
+    private List<ApplicationEventProjection> findEventProjections(
+            String filterClause,
+            List<SqlParameter> parameters
+    ) {
         String sql = """
                 SELECT event_source.application_id,
                        event_source.event_time,
@@ -342,64 +243,124 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
                 ORDER BY event_source.event_time DESC
                 """.formatted(filterClause);
 
+        return executeListQuery(
+                new SqlQuery(sql, parameters),
+                this::mapApplicationEvent,
+                "Failed to find application events"
+        );
+    }
+
+    private List<SqlParameter> dateRangeParameters(LocalDateTime dateFrom, LocalDateTime dateTo) {
+        return List.of(
+                SqlParameter.of(dateFrom),
+                SqlParameter.of(dateTo)
+        );
+    }
+
+    private <T> List<T> executeListQuery(
+            SqlQuery query,
+            RowMapper<T> rowMapper,
+            String failureMessage
+    ) {
         try (Connection connection = connectionFactory.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            bindParameters(statement, parameters);
+             PreparedStatement statement = connection.prepareStatement(query.sql())) {
+            bindParameters(statement, query.parameters());
 
             try (ResultSet resultSet = statement.executeQuery()) {
-                List<ApplicationEventProjection> events = new ArrayList<>();
+                List<T> rows = new ArrayList<>();
                 while (resultSet.next()) {
-                    events.add(new ApplicationEventProjection(
-                            resultSet.getInt("application_id"),
-                            resultSet.getTimestamp("event_time").toLocalDateTime(),
-                            resultSet.getString("event_type"),
-                            resultSet.getString("description")
-                    ));
+                    rows.add(rowMapper.map(resultSet));
                 }
-                return events;
+                return rows;
             }
         } catch (SQLException exception) {
-            throw new DataAccessException("Failed to find application events", exception);
+            throw new DataAccessException(failureMessage, exception);
         }
     }
 
-    private void appendCriteria(
-            StringBuilder sql,
-            List<SqlParameter> parameters,
-            ApplicationSearchCriteria criteria
+    private <T> Optional<T> executeOptionalQuery(
+            SqlQuery query,
+            RowMapper<T> rowMapper,
+            String failureMessage
     ) {
-        if (criteria == null) {
-            return;
-        }
+        try (Connection connection = connectionFactory.getConnection();
+             PreparedStatement statement = connection.prepareStatement(query.sql())) {
+            bindParameters(statement, query.parameters());
 
-        if (criteria.phone() != null && !criteria.phone().isBlank()) {
-            sql.append(" AND a.phone ILIKE ?");
-            parameters.add(SqlParameter.of("%" + criteria.phone() + "%"));
-        }
-        if (criteria.email() != null && !criteria.email().isBlank()) {
-            sql.append(" AND a.email ILIKE ?");
-            parameters.add(SqlParameter.of("%" + criteria.email() + "%"));
-        }
-        if (criteria.lastCommunicationResult() != null) {
-            sql.append(" AND lc.result = ?");
-            parameters.add(SqlParameter.of(criteria.lastCommunicationResult().name()));
-        }
-        if (criteria.dateFrom() != null) {
-            sql.append(" AND a.datetime >= ?");
-            parameters.add(SqlParameter.of(criteria.dateFrom()));
-        }
-        if (criteria.dateTo() != null) {
-            sql.append(" AND a.datetime <= ?");
-            parameters.add(SqlParameter.of(criteria.dateTo()));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(rowMapper.map(resultSet));
+            }
+        } catch (SQLException exception) {
+            throw new DataAccessException(failureMessage, exception);
         }
     }
 
-    private String placeholders(int count) {
-        StringJoiner joiner = new StringJoiner(", ");
-        for (int index = 0; index < count; index++) {
-            joiner.add("?");
-        }
-        return joiner.toString();
+    private ApplicationSummaryProjection mapApplicationSummary(ResultSet resultSet) throws SQLException {
+        return new ApplicationSummaryProjection(
+                resultSet.getInt("application_id"),
+                resultSet.getString("full_name"),
+                resultSet.getString("program_name"),
+                ApplicationStatus.valueOf(resultSet.getString("status_name")),
+                nullableCommunicationResult(resultSet, "last_communication_result"),
+                resultSet.getTimestamp("datetime").toLocalDateTime()
+        );
+    }
+
+    private ApplicationDetailsProjection mapApplicationDetails(ResultSet resultSet) throws SQLException {
+        return new ApplicationDetailsProjection(
+                resultSet.getInt("application_id"),
+                resultSet.getString("full_name"),
+                resultSet.getString("program_name"),
+                resultSet.getString("phone"),
+                resultSet.getString("email"),
+                resultSet.getString("comment"),
+                ApplicationStatus.valueOf(resultSet.getString("status_name")),
+                nullableCommunicationResult(resultSet, "last_communication_result"),
+                resultSet.getTimestamp("datetime").toLocalDateTime()
+        );
+    }
+
+    private ApplicationSubmissionStatsProjection mapSubmissionStats(ResultSet resultSet) throws SQLException {
+        return new ApplicationSubmissionStatsProjection(
+                resultSet.getDate("period_start").toLocalDate(),
+                resultSet.getLong("applications_count")
+        );
+    }
+
+    private CommunicationResultStatsProjection mapCommunicationResultStats(ResultSet resultSet)
+            throws SQLException {
+        return new CommunicationResultStatsProjection(
+                CommunicationResult.valueOf(resultSet.getString("result")),
+                resultSet.getLong("communications_count")
+        );
+    }
+
+    private ChannelCommunicationResultStatsProjection mapChannelCommunicationResultStats(ResultSet resultSet)
+            throws SQLException {
+        return new ChannelCommunicationResultStatsProjection(
+                CommunicationChannel.valueOf(resultSet.getString("channel")),
+                CommunicationResult.valueOf(resultSet.getString("result")),
+                resultSet.getLong("communications_count")
+        );
+    }
+
+    private FinalResultStatsProjection mapFinalResultStats(ResultSet resultSet) throws SQLException {
+        return new FinalResultStatsProjection(
+                ApplicationStatus.valueOf(resultSet.getString("status_name")),
+                resultSet.getLong("applications_count")
+        );
+    }
+
+    private ApplicationEventProjection mapApplicationEvent(ResultSet resultSet) throws SQLException {
+        return new ApplicationEventProjection(
+                resultSet.getInt("application_id"),
+                resultSet.getTimestamp("event_time").toLocalDateTime(),
+                resultSet.getString("event_type"),
+                resultSet.getString("description")
+        );
     }
 
     private void bindParameters(PreparedStatement statement, List<SqlParameter> parameters) throws SQLException {
@@ -417,6 +378,17 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
         return CommunicationResult.valueOf(value);
     }
 
+    @FunctionalInterface
+    private interface RowMapper<T> {
+        T map(ResultSet resultSet) throws SQLException;
+    }
+
+    private record SqlQuery(String sql, List<SqlParameter> parameters) {
+    }
+
+    static record SearchQuerySnapshot(String sql, int parameterCount) {
+    }
+
     private record SqlParameter(Object value) {
         private static SqlParameter of(Object value) {
             return new SqlParameter(value);
@@ -430,6 +402,121 @@ public class JdbcApplicationQueryRepository implements ApplicationQueryRepositor
             } else {
                 statement.setString(parameterIndex, (String) value);
             }
+        }
+    }
+
+    private static class ApplicationSearchQueryBuilder {
+        private final List<ApplicationStatus> statuses;
+        private final ApplicationSearchCriteria criteria;
+        private final List<SqlParameter> parameters = new ArrayList<>();
+
+        private ApplicationSearchQueryBuilder(
+                List<ApplicationStatus> statuses,
+                ApplicationSearchCriteria criteria
+        ) {
+            this.statuses = statuses;
+            this.criteria = criteria;
+        }
+
+        private SqlQuery build() {
+            StringBuilder sql = new StringBuilder("""
+                    SELECT a.application_id,
+                           concat_ws(' ', a.first_name, a.last_name) AS full_name,
+                           p.name AS program_name,
+                           s.name AS status_name,
+                           lc.result AS last_communication_result,
+                           a.datetime
+                    FROM application a
+                    JOIN educational_program p ON p.program_id = a.program_id
+                    JOIN application_status s ON s.status_id = a.status_id
+                    LEFT JOIN LATERAL (
+                        SELECT ac.result
+                        FROM application_communication ac
+                        WHERE ac.application_id = a.application_id
+                        ORDER BY ac.datetime DESC, ac.event_id DESC
+                        LIMIT 1
+                    ) lc ON TRUE
+                    """);
+            appendCommunicationPresenceJoin(sql);
+            sql.append("""
+                    WHERE s.name IN (
+                    """);
+            sql.append(placeholders(statuses.size())).append(")");
+
+            statuses.forEach(status -> parameters.add(SqlParameter.of(status.name())));
+            appendCriteria(sql);
+            sql.append(" ORDER BY a.datetime DESC, a.application_id DESC");
+
+            return new SqlQuery(sql.toString(), parameters);
+        }
+
+        private void appendCriteria(StringBuilder sql) {
+            if (criteria == null) {
+                return;
+            }
+
+            if (criteria.phone() != null && !criteria.phone().isBlank()) {
+                sql.append(" AND a.phone ILIKE ?");
+                parameters.add(SqlParameter.of("%" + criteria.phone() + "%"));
+            }
+            if (criteria.email() != null && !criteria.email().isBlank()) {
+                sql.append(" AND a.email ILIKE ?");
+                parameters.add(SqlParameter.of("%" + criteria.email() + "%"));
+            }
+            if (isByResultMode()) {
+                sql.append(" AND lc.result = ?");
+                parameters.add(SqlParameter.of(criteria.lastCommunicationResult().name()));
+            }
+            if (isWithoutCommunicationsMode()) {
+                sql.append(" AND comm.has_communication IS NULL");
+            }
+            if (criteria.dateFrom() != null) {
+                sql.append(" AND a.datetime >= ?");
+                parameters.add(SqlParameter.of(criteria.dateFrom()));
+            }
+            if (criteria.dateTo() != null) {
+                sql.append(" AND a.datetime <= ?");
+                parameters.add(SqlParameter.of(criteria.dateTo()));
+            }
+        }
+
+        private String placeholders(int count) {
+            StringJoiner joiner = new StringJoiner(", ");
+            for (int index = 0; index < count; index++) {
+                joiner.add("?");
+            }
+            return joiner.toString();
+        }
+
+        private void appendCommunicationPresenceJoin(StringBuilder sql) {
+            if (!isWithoutCommunicationsMode()) {
+                return;
+            }
+
+            sql.append("""
+                    LEFT JOIN LATERAL (
+                        SELECT 1 AS has_communication
+                        FROM application_communication ac
+                        WHERE ac.application_id = a.application_id
+                        LIMIT 1
+                    ) comm ON TRUE
+                    """);
+        }
+
+        private boolean isByResultMode() {
+            return filterMode() == LastCommunicationFilterMode.BY_RESULT
+                    && criteria.lastCommunicationResult() != null;
+        }
+
+        private boolean isWithoutCommunicationsMode() {
+            return filterMode() == LastCommunicationFilterMode.WITHOUT_COMMUNICATIONS;
+        }
+
+        private LastCommunicationFilterMode filterMode() {
+            if (criteria == null || criteria.lastCommunicationFilterMode() == null) {
+                return LastCommunicationFilterMode.ANY;
+            }
+            return criteria.lastCommunicationFilterMode();
         }
     }
 }

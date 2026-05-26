@@ -62,22 +62,29 @@ public class JdbcApplicationRepository implements ApplicationRepository {
         }
 
         try (Connection connection = connectionFactory.getConnection()) {
-            boolean previousAutoCommit = connection.getAutoCommit();
-            connection.setAutoCommit(false);
-
-            try {
+            executeInTransaction(connection, () -> {
                 updateApplicationStatus(connection, application);
-                saveNewEvents(connection, application);
-                connection.commit();
-                application.clearNewEvents();
-                connection.setAutoCommit(previousAutoCommit);
-            } catch (SQLException | RuntimeException exception) {
-                connection.rollback();
-                connection.setAutoCommit(previousAutoCommit);
-                throw exception;
-            }
+                saveUncommittedDomainEvents(connection, application);
+            });
+            application.clearNewEvents();
         } catch (SQLException exception) {
             throw new DataAccessException("Failed to save application", exception);
+        }
+    }
+
+    private void executeInTransaction(Connection connection, TransactionalOperation operation)
+            throws SQLException {
+        boolean previousAutoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+
+        try {
+            operation.execute();
+            connection.commit();
+        } catch (SQLException | RuntimeException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(previousAutoCommit);
         }
     }
 
@@ -113,13 +120,21 @@ public class JdbcApplicationRepository implements ApplicationRepository {
         }
     }
 
-    private void saveNewEvents(Connection connection, Application application) throws SQLException {
+    private void saveUncommittedDomainEvents(Connection connection, Application application) throws SQLException {
         for (ApplicationEvent event : application.getNewEvents()) {
-            if (event instanceof CommunicationEvent communicationEvent) {
-                saveCommunicationEvent(connection, application.getApplicationId(), communicationEvent);
-            } else if (event instanceof StatusChangeEvent statusChangeEvent) {
-                saveStatusChangeEvent(connection, application.getApplicationId(), statusChangeEvent);
-            }
+            saveDomainEvent(connection, application.getApplicationId(), event);
+        }
+    }
+
+    private void saveDomainEvent(
+            Connection connection,
+            Integer applicationId,
+            ApplicationEvent event
+    ) throws SQLException {
+        if (event instanceof CommunicationEvent communicationEvent) {
+            saveCommunicationEvent(connection, applicationId, communicationEvent);
+        } else if (event instanceof StatusChangeEvent statusChangeEvent) {
+            saveStatusChangeEvent(connection, applicationId, statusChangeEvent);
         }
     }
 
@@ -169,5 +184,10 @@ public class JdbcApplicationRepository implements ApplicationRepository {
             statement.setTimestamp(5, Timestamp.valueOf(event.getOccurredAt()));
             statement.executeUpdate();
         }
+    }
+
+    @FunctionalInterface
+    private interface TransactionalOperation {
+        void execute() throws SQLException;
     }
 }
